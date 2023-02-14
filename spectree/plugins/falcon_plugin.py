@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from .._types import ModelType
 from ..response import Response
 from .base import BasePlugin
-
+from spectree.errors import ResponseValidationError
 
 class OpenAPI:
     def __init__(self, spec: Mapping[str, str]):
@@ -199,7 +199,6 @@ class FalconPlugin(BasePlugin):
         resp: Optional[Response],
         before: Callable,
         after: Callable,
-        validation_error_status: int,
         skip_validation: bool,
         *args: Any,
         **kwargs: Any,
@@ -217,12 +216,10 @@ class FalconPlugin(BasePlugin):
 
         except ValidationError as err:
             req_validation_error = err
-            _resp.status = f"{validation_error_status} Validation Error"
-            _resp.media = err.errors()
 
-        before(_req, _resp, req_validation_error, _self)
+        before(_req, _resp, req_validation_error, _self, self.logger)
         if req_validation_error:
-            return
+            raise req_validation_error
 
         func(*args, **kwargs)
 
@@ -240,101 +237,11 @@ class FalconPlugin(BasePlugin):
                     _resp.status = HTTP_500
                     _resp.media = err.errors()
 
-        after(_req, _resp, resp_validation_error, _self)
+        after(_req, _resp, resp_validation_error, _self, self.logger)
+        if resp_validation_error:
+            raise errors.ResponseValidationError(str(resp_validation_error))
 
     def bypass(self, func, method):
         if isinstance(func, partial):
             return True
         return inspect.isfunction(func)
-
-
-class FalconAsgiPlugin(FalconPlugin):
-    """Light wrapper around default Falcon plug-in to support Falcon 3.0 ASGI apps"""
-
-    ASYNC = True
-    OPEN_API_ROUTE_CLASS = OpenAPIAsgi
-    DOC_PAGE_ROUTE_CLASS = DocPageAsgi
-
-    async def request_validation(self, req, query, json, form, headers, cookies):
-        if query:
-            req.context.query = query.parse_obj(req.params)
-        if headers:
-            req.context.headers = headers.parse_obj(req.headers)
-        if cookies:
-            req.context.cookies = cookies.parse_obj(req.cookies)
-        if json:
-            try:
-                media = await req.get_media()
-            except HTTPError as err:
-                if err.status not in self.FALCON_MEDIA_ERROR_CODE:
-                    raise
-                media = None
-            req.context.json = json.parse_obj(media)
-        if form:
-            try:
-                form_data = await req.get_media()
-            except HTTPError as err:
-                if err.status not in self.FALCON_MEDIA_ERROR_CODE:
-                    raise
-                req.context.form = None
-            else:
-                res_data = {}
-                async for x in form_data:
-                    res_data[x.name] = x
-                    await x.data  # TODO - how to avoid this?
-                req.context.form = form.parse_obj(res_data)
-
-    async def validate(
-        self,
-        func: Callable,
-        query: Optional[ModelType],
-        json: Optional[ModelType],
-        form: Optional[ModelType],
-        headers: Optional[ModelType],
-        cookies: Optional[ModelType],
-        resp: Optional[Response],
-        before: Callable,
-        after: Callable,
-        validation_error_status: int,
-        skip_validation: bool,
-        *args: Any,
-        **kwargs: Any,
-    ):
-        # falcon endpoint method arguments: (self, req, resp)
-        _self, _req, _resp = args[:3]
-        req_validation_error, resp_validation_error = None, None
-        try:
-            await self.request_validation(_req, query, json, form, headers, cookies)
-            if self.config.annotations:
-                annotations = get_type_hints(func)
-                for name in ("query", "json", "form", "headers", "cookies"):
-                    if annotations.get(name):
-                        kwargs[name] = getattr(_req.context, name)
-
-        except ValidationError as err:
-            req_validation_error = err
-            _resp.status = f"{validation_error_status} Validation Error"
-            _resp.media = err.errors()
-
-        before(_req, _resp, req_validation_error, _self)
-        if req_validation_error:
-            return
-
-        await func(*args, **kwargs)
-
-        if resp and resp.has_model():
-            model = resp.find_model(_resp.status[:3])
-            if model and isinstance(_resp.media, model):
-                _resp.media = _resp.media.dict()
-                skip_validation = True
-
-            model = resp.find_model(_resp.status[:3])
-            if model and not skip_validation:
-                try:
-                    model.parse_obj(_resp.media)
-                except ValidationError as err:
-                    resp_validation_error = err
-                    _resp.status = HTTP_500
-                    _resp.media = err.errors()
-
-        after(_req, _resp, resp_validation_error, _self)

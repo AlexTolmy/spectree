@@ -46,6 +46,9 @@ class BasePlugin(Generic[BackendRoute]):
         self.config: Configuration = spectree.config
         self.logger = logging.getLogger(__name__)
 
+    def set_config(self, config: Configuration):
+        self.config = config
+
     def register_route(self, app: Any):
         """
         :param app: backend framework application

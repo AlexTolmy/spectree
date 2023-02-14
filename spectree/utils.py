@@ -180,7 +180,7 @@ def parse_name(func: Callable[..., Any]) -> str:
 
 
 def default_before_handler(
-    req: Any, resp: Any, req_validation_error: ValidationError, instance: Any
+    req: Any, resp: Any, req_validation_error: ValidationError, instance: Any, logger
 ):
     """
     default handler called before the endpoint function after the request validation
@@ -193,15 +193,14 @@ def default_before_handler(
     """
     if req_validation_error:
         logger.error(
-            "422 Request Validation Error: {} - {}".format(
-                req_validation_error.model.__name__,
-                req_validation_error.errors(),
-            )
+            "Request Validation Error, model [%s], errors: %s",
+            req_validation_error.model.__name__,
+            req_validation_error.errors(),
         )
 
 
 def default_after_handler(
-    req: Any, resp: Any, resp_validation_error: ValidationError, instance: Any
+    req: Any, resp: Any, resp_validation_error: ValidationError, instance: Any, logger
 ):
     """
     default handler called after the response validation
@@ -214,12 +213,10 @@ def default_after_handler(
     """
     if resp_validation_error:
         logger.error(
-            "500 Response Validation Error: {} - {}".format(
-                resp_validation_error.model.__name__,
-                resp_validation_error.errors(),
-            )
+            "Response Validation Error, model [%s], errors: %s",
+            resp_validation_error.model.__name__,
+            resp_validation_error.errors(),
         )
-
 
 def hash_module_path(module_path: str):
     """

@@ -13,6 +13,7 @@ from typing import (
     get_type_hints,
 )
 
+from . import Response
 from ._types import FunctionDecorator, ModelType
 from .config import Configuration, ModeEnum
 from .models import Tag, ValidationError
@@ -30,6 +31,10 @@ from .utils import (
     parse_request,
     parse_resp,
 )
+
+
+class Missing:
+    pass
 
 
 class SpecTree:
@@ -60,7 +65,7 @@ class SpecTree:
         app: Any = None,
         before: Callable = default_before_handler,
         after: Callable = default_after_handler,
-        validation_error_status: int = 422,
+        validation_error_status: int = 400,
         validation_error_model: Optional[ModelType] = None,
         **kwargs: Any,
     ):
@@ -69,6 +74,7 @@ class SpecTree:
         self.validation_error_status = validation_error_status
         self.validation_error_model = validation_error_model or ValidationError
         self.config: Configuration = Configuration.parse_obj(kwargs)
+        self.prev_config = kwargs
         self.backend_name = backend_name
         if backend:
             self.backend = backend(self)
@@ -89,6 +95,16 @@ class SpecTree:
         """
         self.app = app
         self.backend.register_route(self.app)
+
+    def update_config(self, **config):
+        new_config = {}
+        new_config.update(self.prev_config)
+        new_config.update(config)
+
+        self.config: Configuration = Configuration.parse_obj(new_config)
+        self.backend.set_config(self.config)
+
+        self.prev_config = new_config
 
     @property
     def spec(self):
@@ -123,13 +139,12 @@ class SpecTree:
         form: Optional[ModelType] = None,
         headers: Optional[ModelType] = None,
         cookies: Optional[ModelType] = None,
-        resp: Optional[Response] = None,
+        resp=Missing,
         tags: Sequence = (),
         security: Any = None,
         deprecated: bool = False,
         before: Optional[Callable] = None,
         after: Optional[Callable] = None,
-        validation_error_status: int = 0,
         path_parameter_descriptions: Optional[Mapping[str, str]] = None,
         skip_validation: bool = False,
         operation_id: Optional[str] = None,
@@ -163,8 +178,8 @@ class SpecTree:
         """
         # If the status code for validation errors is not overridden on the level of
         # the view function, use the globally set status code for validation errors.
-        if validation_error_status == 0:
-            validation_error_status = self.validation_error_status
+        if resp is Missing:
+            resp = Response()
 
         def decorate_validation(func: Callable):
             # for sync framework
@@ -180,7 +195,6 @@ class SpecTree:
                     resp,
                     before or self.before,
                     after or self.after,
-                    validation_error_status,
                     skip_validation,
                     *args,
                     **kwargs,
@@ -199,7 +213,6 @@ class SpecTree:
                     resp,
                     before or self.before,
                     after or self.after,
-                    validation_error_status,
                     skip_validation,
                     *args,
                     **kwargs,
@@ -231,7 +244,7 @@ class SpecTree:
                 # Make sure that the endpoint specific status code and data model for
                 # validation errors shows up in the response spec.
                 resp.add_model(
-                    validation_error_status, self.validation_error_model, replace=False
+                    400, self.validation_error_model, replace=False
                 )
                 for model in resp.models:
                     self._add_model(model=model)
